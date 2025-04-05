@@ -159,7 +159,7 @@ def get_response(user_query, _chat_history, _vector_store):
 
 # --- Streamlit App ---
 
-st.set_page_config(page_title="Gemini RAG Chatbot", page_icon="🤖")
+st.set_page_config(page_title="Gemini RAG Chatbot question and answer", page_icon="🤖")
 st.title("🤖 Gemini Chatbot with Document RAG")
 
 # --- Initialize session state variables ---

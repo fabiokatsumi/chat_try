@@ -1,108 +1,197 @@
 import streamlit as st
+import google.generativeai as genai
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage, AIMessage, SystemMessage
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain, create_history_aware_retriever
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.messages import HumanMessage, AIMessage
 
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="Gemini Chatbot",
-    page_icon="💬",
-    layout="centered",
-    initial_sidebar_state="expanded",
-)
+# --- Configuration ---
+load_dotenv()
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-st.title("💬 Simple Chatbot with Gemini & LangChain")
-st.caption("A basic Streamlit chatbot using Google's Gemini Pro API via LangChain.")
+# --- Helper Functions ---
 
-# --- API Key Handling ---
-# Option 1: Get API key from sidebar input (more interactive)
-google_api_key = st.sidebar.text_input("Google API Key", type="password", key="api_key_input")
-st.sidebar.markdown(
-    "Get your Google API Key from [Google AI Studio](https://aistudio.google.com/app/apikey)"
-)
-
-# Option 2: Get API key from environment variable (more secure for deployment)
-# Make sure to set the GOOGLE_API_KEY environment variable if using this.
-# google_api_key = os.getenv("GOOGLE_API_KEY")
-
-# --- Session State Initialization ---
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        # You can add a default system message if needed
-        # SystemMessage(content="You are a helpful AI assistant.")
-    ]
-
-# --- Helper Function to Initialize LLM ---
-def get_llm(api_key):
-    """Initializes the ChatGoogleGenerativeAI model."""
-    # Ensure convert_system_message_to_human=True for models that might not natively support SystemMessages yet
-    try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite",  # Or choose another model like "gemini-1.5-flash"
-            google_api_key=api_key,
-            convert_system_message_to_human=True,
-            temperature=0.7 # Adjust creativity (0 = deterministic, 1 = more creative)
-        )
-        return llm
-    except Exception as e:
-        st.error(f"Failed to initialize the LLM. Check your API key and configuration. Error: {e}")
+@st.cache_resource(show_spinner="Loading and processing PDF...")
+def load_and_process_pdfs(uploaded_files):
+    """Loads PDF files, splits them into chunks, creates embeddings, and builds a FAISS vector store."""
+    if not uploaded_files:
         return None
 
-# --- Display Existing Chat Messages ---
-st.write("---") # Separator
-for message in st.session_state.messages:
-    if isinstance(message, HumanMessage):
-        with st.chat_message("user"):
-            st.markdown(message.content)
-    elif isinstance(message, AIMessage):
-        with st.chat_message("assistant"):
-            st.markdown(message.content)
-    # elif isinstance(message, SystemMessage): # Optional: Display system messages if needed
-    #     with st.chat_message("system"):
-    #         st.info(message.content) # Or use st.markdown
+    all_docs = []
+    for uploaded_file in uploaded_files:
+        # Save temp file to disk (PyPDFLoader needs a file path)
+        with open(uploaded_file.name, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        loader = PyPDFLoader(uploaded_file.name)
+        docs = loader.load()
+        all_docs.extend(docs)
+        os.remove(uploaded_file.name) # Clean up temp file
 
-# --- Handle User Input and Chat Logic ---
-if prompt := st.chat_input("Ask me anything..."):
-    # 1. Check if API key is provided
-    if not google_api_key:
-        st.warning("Please enter your Google API Key in the sidebar to chat.")
-        st.stop() # Stop execution if no API key
+    if not all_docs:
+        return None
 
-    # 2. Initialize LLM (only if API key is present)
-    llm = get_llm(google_api_key)
-    if not llm: # If LLM initialization failed
-        st.stop()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    split_docs = text_splitter.split_documents(all_docs)
 
-    # 3. Add user message to session state and display it
-    user_message = HumanMessage(content=prompt)
-    st.session_state.messages.append(user_message)
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
+    vector_store = FAISS.from_documents(split_docs, embeddings)
+    return vector_store
 
-    # 4. Generate and display AI response
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty() # Create a placeholder for the response
-        full_response = ""
-        try:
-            with st.spinner("Thinking..."):
-                 # Directly invoke the LLM with the current message history
-                 # LangChain's ChatGoogleGenerativeAI takes the list of messages directly
-                ai_response = llm.invoke(st.session_state.messages)
-                full_response = ai_response.content
+def get_context_retriever_chain(_vector_store):
+    """Creates a chain to retrieve relevant context based on chat history."""
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API_KEY) # Use a fast model for context retrieval
 
-            # Display the final response
-            message_placeholder.markdown(full_response)
+    retriever = _vector_store.as_retriever()
 
-            # 5. Add AI response to session state
-            st.session_state.messages.append(AIMessage(content=full_response))
+    prompt = ChatPromptTemplate.from_messages([
+      MessagesPlaceholder(variable_name="chat_history"),
+      ("user", "{input}"),
+      ("user", "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation")
+    ])
 
-        except Exception as e:
-            st.error(f"An error occurred while generating the response: {e}")
-            # Optional: Remove the last user message if the API call failed?
-            # if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage):
-            #     st.session_state.messages.pop()
+    retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
+    return retriever_chain
+
+def get_conversational_rag_chain(_retriever_chain):
+    """Creates the main RAG chain for answering questions based on retrieved context."""
+    llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY) # Use the main model for generation
+
+    prompt = ChatPromptTemplate.from_messages([
+      ("system", "Answer the user's questions based on the below context:\n\n{context}. If the context doesn't contain the answer, say you don't have enough information from the provided documents."),
+      MessagesPlaceholder(variable_name="chat_history"),
+      ("user", "{input}"),
+    ])
+
+    stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
+    return create_retrieval_chain(_retriever_chain, stuff_documents_chain)
+
+def get_response(user_query, _chat_history, _vector_store):
+    """Gets the chatbot's response, using RAG if a vector store is available."""
+    if _vector_store is None:
+        # Basic chat without RAG
+        llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant. Answer the user's question."),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("user", "{input}"),
+        ])
+        chain = prompt | llm
+        response = chain.invoke({
+            "chat_history": _chat_history,
+            "input": user_query
+        })
+        return response.content
+    else:
+        # RAG chat
+        retriever_chain = get_context_retriever_chain(_vector_store)
+        conversation_rag_chain = get_conversational_rag_chain(retriever_chain)
+
+        response = conversation_rag_chain.invoke({
+            "chat_history": _chat_history,
+            "input": user_query
+        })
+        return response['answer']
 
 
-# --- Initial message ---
-if len(st.session_state.messages) == 0:
-     st.info("Enter your Google API Key in the sidebar and type a message below to start chatting!")
+# --- Streamlit App ---
+
+st.set_page_config(page_title="Gemini RAG Chatbot", page_icon="🤖")
+st.title("🤖 Gemini Chatbot with Document RAG")
+
+# --- Sidebar for API Key and Document Upload ---
+with st.sidebar:
+    st.header("Configuration")
+
+    # Check if API key is loaded
+    api_key_configured = bool(GOOGLE_API_KEY)
+
+    if not api_key_configured:
+        GOOGLE_API_KEY = st.text_input("Enter your Google API Key:", type="password")
+        if GOOGLE_API_KEY:
+            genai.configure(api_key=GOOGLE_API_KEY)
+            st.success("API Key Configured!")
+            api_key_configured = True
+        else:
+            st.warning("Please enter your Google API Key to use the chatbot.")
+            st.stop() # Stop execution if no API key
+    else:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        st.success("API Key loaded successfully!")
+
+
+    st.header("Upload Documents (PDF)")
+    uploaded_files = st.file_uploader(
+        "Upload your PDF documents here",
+        type="pdf",
+        accept_multiple_files=True,
+        key="file_uploader" # Add a key to manage state better
+    )
+
+    if uploaded_files:
+        if "vector_store" not in st.session_state or st.session_state.get("processed_files") != [f.name for f in uploaded_files]:
+            # Process only if new files are uploaded or vector store doesn't exist
+            st.session_state.vector_store = load_and_process_pdfs(uploaded_files)
+            st.session_state.processed_files = [f.name for f in uploaded_files] # Store names of processed files
+            if st.session_state.vector_store:
+                st.success("Documents processed successfully! You can now ask questions about them.")
+            else:
+                st.error("Failed to process documents.")
+        elif st.session_state.vector_store:
+            st.info("Documents already processed.")
+    elif "vector_store" in st.session_state:
+        # Clear vector store if files are removed
+         if st.button("Clear Uploaded Documents Context"):
+            del st.session_state.vector_store
+            if "processed_files" in st.session_state:
+                del st.session_state.processed_files
+            st.rerun()
+
+
+# --- Chat Interface ---
+
+# Initialize chat history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+        AIMessage(content="Hello! Ask me anything, or upload PDFs to ask questions about specific documents."),
+    ]
+
+# Retrieve vector store from session state (if processed)
+vector_store = st.session_state.get("vector_store", None)
+
+# Display chat messages
+for message in st.session_state.chat_history:
+    if isinstance(message, AIMessage):
+        with st.chat_message("AI"):
+            st.write(message.content)
+    elif isinstance(message, HumanMessage):
+        with st.chat_message("Human"):
+            st.write(message.content)
+
+# User input
+user_query = st.chat_input("Type your message here...")
+if user_query is not None and user_query.strip() != "":
+    if not api_key_configured:
+         st.error("Please configure your Google API Key in the sidebar first.")
+    else:
+        # Add user message to history and display
+        st.session_state.chat_history.append(HumanMessage(content=user_query))
+        with st.chat_message("Human"):
+            st.markdown(user_query)
+
+        # Get response (RAG or basic)
+        with st.spinner("Thinking..."):
+            response = get_response(user_query, st.session_state.chat_history, vector_store)
+
+        # Add AI response to history and display
+        st.session_state.chat_history.append(AIMessage(content=response))
+        with st.chat_message("AI"):
+            st.markdown(response)
+
+        # Scroll to bottom (optional, might need adjustments depending on Streamlit version)
+        # st.experimental_rerun() # Can sometimes help, but might clear input

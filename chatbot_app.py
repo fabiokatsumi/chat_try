@@ -349,10 +349,9 @@ if user_query is not None and user_query.strip() != "":
             except ValueError:
                  err_msg = "Invalid format. Use 'save prompt as NAME: PROMPT TEXT' (colon required)."
                  st.session_state.chat_history.append(AIMessage(content=f"Error: {err_msg}"))
-            st.rerun() # Rerun after processing save command attempt
+            st.rerun() 
+            # Rerun after processing save command attempt
 
-
-        
         # 2. Run Single Prompt Command (from chat input)
         run_prefix = "run prompt "
         elif normalized_query.startswith(run_prefix):

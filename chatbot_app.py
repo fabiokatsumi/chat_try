@@ -60,7 +60,7 @@ def get_context_retriever_chain(_vector_store):
 
 def get_conversational_rag_chain(_retriever_chain):
     """Creates the main RAG chain for answering questions based on retrieved context."""
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY) # Use the main model for generation
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY) # Use the main model for generation
 
     prompt = ChatPromptTemplate.from_messages([
       ("system", "Answer the user's questions based on the below context:\n\n{context}. If the context doesn't contain the answer, say you don't have enough information from the provided documents."),

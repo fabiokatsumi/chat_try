@@ -45,7 +45,7 @@ def load_and_process_pdfs(uploaded_files):
 
 def get_context_retriever_chain(_vector_store):
     """Creates a chain to retrieve relevant context based on chat history."""
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API_KEY) # Use a fast model for context retrieval
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY) # Use a fast model for context retrieval
 
     retriever = _vector_store.as_retriever()
 
@@ -75,7 +75,7 @@ def get_response(user_query, _chat_history, _vector_store):
     """Gets the chatbot's response, using RAG if a vector store is available."""
     if _vector_store is None:
         # Basic chat without RAG
-        llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a helpful assistant. Answer the user's question."),
             MessagesPlaceholder(variable_name="chat_history"),

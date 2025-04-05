@@ -38,7 +38,7 @@ def get_llm(api_key):
     # Ensure convert_system_message_to_human=True for models that might not natively support SystemMessages yet
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-pro",  # Or choose another model like "gemini-1.5-flash"
+            model="gemini-2.0-flash-lite",  # Or choose another model like "gemini-1.5-flash"
             google_api_key=api_key,
             convert_system_message_to_human=True,
             temperature=0.7 # Adjust creativity (0 = deterministic, 1 = more creative)

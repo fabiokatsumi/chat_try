@@ -1,6 +1,6 @@
 # chatbot_app.py
 # Gemini RAG Chatbot with Save/Run Prompt Features (including 'run all')
-# Corrected version addressing SyntaxError on elif.
+# Version with corrected indentation for command handling block.
 # User Context: Saturday, April 5, 2025 - São Paulo, Brazil
 
 import streamlit as st
@@ -24,15 +24,12 @@ api_key_configured = False # Flag to track runtime configuration
 
 # --- Helper Functions ---
 
-# Use st.cache_data for data processing, st.cache_resource for connections/models
-# Caching the vector store creation based on the content/names of uploaded files
 @st.cache_resource(show_spinner="Loading and processing PDFs...")
 def load_and_process_pdfs(uploaded_files):
     """Loads PDF files, splits them into chunks, creates embeddings, and builds a FAISS vector store."""
-    global api_key_configured # Allow modification of the global flag
+    global api_key_configured
     if not GOOGLE_API_KEY or not api_key_configured:
-        # Don't explicitly show error here, handled in sidebar / main logic
-        return None # Need API key for embeddings
+        return None
 
     if not uploaded_files:
         return None
@@ -44,7 +41,7 @@ def load_and_process_pdfs(uploaded_files):
             temp_file_path = f"temp_{uploaded_file.file_id}_{uploaded_file.name}" if hasattr(uploaded_file, 'file_id') else f"temp_{uploaded_file.name}"
             with open(temp_file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            temp_files.append(temp_file_path) # Keep track for cleanup
+            temp_files.append(temp_file_path)
 
             loader = PyPDFLoader(temp_file_path)
             docs = loader.load()
@@ -68,7 +65,6 @@ def load_and_process_pdfs(uploaded_files):
         st.error(f"Error processing PDFs: {e}")
         return None
     finally:
-        # Clean up temporary files
         for file_path in temp_files:
             if os.path.exists(file_path):
                 try:
@@ -79,31 +75,26 @@ def load_and_process_pdfs(uploaded_files):
 
 def get_context_retriever_chain(_vector_store):
     """Creates a chain to retrieve relevant context based on chat history."""
-    if not api_key_configured: return None # Need configured API key
+    if not api_key_configured: return None
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.1)
-
     retriever = _vector_store.as_retriever()
-
     prompt = ChatPromptTemplate.from_messages([
       MessagesPlaceholder(variable_name="chat_history"),
       ("user", "{input}"),
       ("user", "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation")
     ])
-
     retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
     return retriever_chain
 
 def get_conversational_rag_chain(_retriever_chain):
     """Creates the main RAG chain for answering questions based on retrieved context."""
-    if not api_key_configured: return None # Need configured API key
+    if not api_key_configured: return None
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.7)
-
     prompt = ChatPromptTemplate.from_messages([
       ("system", "Answer the user's questions based ONLY on the below context:\n\n{context}\n\nIf the answer is not in the context, state that clearly based on the provided documents. Do not make up information."),
       MessagesPlaceholder(variable_name="chat_history"),
       ("user", "{input}"),
     ])
-
     stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
     return create_retrieval_chain(_retriever_chain, stuff_documents_chain)
 
@@ -122,37 +113,20 @@ def get_response(user_query, _chat_history, _vector_store):
                 ("user", "{input}"),
             ])
             chain = prompt | llm
-            response = chain.invoke({
-                "chat_history": _chat_history,
-                "input": user_query
-            })
-            if hasattr(response, 'content'):
-                return response.content
-            else:
-                return str(response)
+            response = chain.invoke({"chat_history": _chat_history, "input": user_query})
+            return response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             st.error(f"Error during basic chat generation: {e}")
             return "Sorry, I encountered an error trying to generate a response."
-
     else:
         # RAG chat
         try:
             retriever_chain = get_context_retriever_chain(_vector_store)
             if retriever_chain is None: return "Error: Could not create retriever chain (check API key?)."
-
             conversation_rag_chain = get_conversational_rag_chain(retriever_chain)
             if conversation_rag_chain is None: return "Error: Could not create RAG chain (check API key?)."
-
-            response = conversation_rag_chain.invoke({
-                "chat_history": _chat_history,
-                "input": user_query
-            })
-
-            if isinstance(response, dict) and 'answer' in response:
-                return response['answer']
-            else:
-                st.warning(f"Unexpected RAG response structure: {response}")
-                return str(response)
+            response = conversation_rag_chain.invoke({"chat_history": _chat_history, "input": user_query})
+            return response['answer'] if isinstance(response, dict) and 'answer' in response else str(response)
         except Exception as e:
             st.error(f"Error during RAG generation: {e}")
             return "Sorry, I encountered an error trying to generate a response using the documents."
@@ -164,65 +138,54 @@ st.title("🤖 Gemini Chatbot with Document RAG & Saved Prompts")
 
 # --- Initialize session state variables ---
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        AIMessage(content="Hello! Ask me anything, upload PDFs, save prompts ('save prompt as NAME: TEXT'), run saved prompts ('run prompt NAME' or via sidebar), or run all saved prompts ('run all prompts')."),
-    ]
+    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything, upload PDFs, save/run prompts.")]
 if "saved_prompts" not in st.session_state:
-    st.session_state.saved_prompts = {} # Dictionary to store {name: prompt_text}
+    st.session_state.saved_prompts = {}
 if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None # Holds the FAISS index
+    st.session_state.vector_store = None
 if "processed_file_ids" not in st.session_state:
-    st.session_state.processed_file_ids = set() # Track IDs of processed files to avoid reprocessing same set
-if "run_prompt_name" not in st.session_state: # Used for sidebar run button trigger
+    st.session_state.processed_file_ids = set()
+if "run_prompt_name" not in st.session_state:
     st.session_state.run_prompt_name = None
 
 # --- Sidebar ---
 with st.sidebar:
     st.header("Configuration")
+    # API Key Management (simplified check)
+    if 'api_key_configured' not in st.session_state:
+        st.session_state.api_key_configured = bool(GOOGLE_API_KEY) # Initialize from .env if present
 
-    # API Key Management
-    # Check if already configured in this session
-    api_key_present = bool(GOOGLE_API_KEY)
-    api_key_valid = api_key_configured # Use the flag set upon successful configuration test
+    api_key_input_value = GOOGLE_API_KEY if st.session_state.api_key_configured else ""
 
-    # Display input only if needed
-    api_key_input_value = GOOGLE_API_KEY if api_key_present else ""
-    if not api_key_valid:
+    if not st.session_state.api_key_configured:
         api_key_input_value = st.text_input("Enter Google API Key:", value=api_key_input_value, type="password", key="api_key_input_widget")
-        if api_key_input_value and api_key_input_value != GOOGLE_API_KEY: # If key is entered/changed
+        if api_key_input_value: # Check if user entered anything
              if st.button("Configure API Key", key="config_api_button"):
                  try:
                      genai.configure(api_key=api_key_input_value)
-                     # Test configuration
-                     models = list(genai.list_models())
-                     if not models:
-                          raise ValueError("No models listed, API key might be invalid or lack permissions.")
-                     GOOGLE_API_KEY = api_key_input_value # Store validated key
-                     api_key_configured = True # Set validated flag
+                     models = list(genai.list_models()) # Test call
+                     if not models: raise ValueError("Invalid Key or Permissions")
+                     GOOGLE_API_KEY = api_key_input_value # Store validated key globally
+                     st.session_state.api_key_configured = True # Set session flag
+                     api_key_configured = True # Update global flag as well
                      st.success("API Key Configured Successfully!")
-                     st.rerun() # Rerun to update UI state
+                     st.rerun()
                  except Exception as e:
-                     st.error(f"Failed to configure API Key: {e}")
-                     api_key_configured = False
-                     GOOGLE_API_KEY = None # Clear invalid key attempt
-        elif not api_key_input_value:
+                     st.error(f"API Key Configuration Failed: {e}")
+                     st.session_state.api_key_configured = False
+                     api_key_configured = False # Reset global flag
+                     GOOGLE_API_KEY = None
+        elif not api_key_input_value and not GOOGLE_API_KEY: # Only warn if nothing entered and nothing from env
             st.warning("Please enter your Google API Key.")
 
-    if api_key_valid:
+    if st.session_state.api_key_configured:
+        api_key_configured = True # Ensure global flag is sync with session if already set
         st.success("API Key is configured.")
-        # Optionally display partial key or just status
 
     st.divider()
-
-    # Document Upload and Processing
+    # Document Upload
     st.header("Upload Documents (PDF)")
-    uploaded_files = st.file_uploader(
-        "Upload PDF documents for RAG",
-        type="pdf",
-        accept_multiple_files=True,
-        key="file_uploader",
-        disabled=not api_key_configured # Disable if no valid key
-    )
+    uploaded_files = st.file_uploader("Upload PDFs for RAG", type="pdf", accept_multiple_files=True, key="file_uploader", disabled=not api_key_configured)
 
     if uploaded_files:
         current_file_ids = {f.file_id for f in uploaded_files if hasattr(f, 'file_id')}
@@ -237,105 +200,95 @@ with st.sidebar:
                      st.session_state.vector_store = None
             else:
                  st.warning("API key must be configured to process documents.")
-
     elif not uploaded_files and st.session_state.processed_file_ids:
          st.session_state.vector_store = None
          st.session_state.processed_file_ids = set()
          st.info("Document context cleared.")
 
-    if st.session_state.vector_store is not None:
-        st.caption(f" RAG active ({len(st.session_state.processed_file_ids)} docs)")
-    else:
-        st.caption(" RAG inactive")
-
+    if st.session_state.vector_store is not None: st.caption(f" RAG active ({len(st.session_state.processed_file_ids)} docs)")
+    else: st.caption(" RAG inactive")
     st.divider()
-
-    # Saved Prompts Management
+    # Saved Prompts
     st.header("Saved Prompts")
-    if not st.session_state.saved_prompts:
-        st.caption("No prompts saved yet.")
-        st.caption("Use chat: `save prompt as NAME: TEXT`")
+    if not st.session_state.saved_prompts: st.caption("No prompts saved yet.")
     else:
-        # List individual prompts with Run/Delete buttons
         for name in list(st.session_state.saved_prompts.keys()):
              if name in st.session_state.saved_prompts:
                 prompt_text = st.session_state.saved_prompts[name]
                 col1, col2, col3 = st.columns([4, 1, 1])
-                with col1:
-                    st.text(name)
+                with col1: st.text(name)
                 with col2:
                     if st.button("Run", key=f"run_{name}", help=f"Run: {prompt_text[:50]}...", use_container_width=True, disabled=not api_key_configured):
-                        # Set flag for main loop to process
                         st.session_state.run_prompt_name = name
                         st.rerun()
                 with col3:
                     if st.button("Del", key=f"del_{name}", help="Delete prompt", use_container_width=True):
                         del st.session_state.saved_prompts[name]
-                        # Clear the run flag if the deleted prompt was flagged
-                        if st.session_state.run_prompt_name == name:
-                           st.session_state.run_prompt_name = None
+                        if st.session_state.run_prompt_name == name: st.session_state.run_prompt_name = None
                         st.success(f"Prompt '{name}' deleted.")
                         st.rerun()
 
 # --- Chat Interface ---
 st.subheader("Chat Window")
 
-# Handle the trigger from the sidebar run button first
+# Handle trigger from sidebar run button
 user_query_from_sidebar = None
 if st.session_state.run_prompt_name:
     prompt_name_to_run = st.session_state.run_prompt_name
     st.session_state.run_prompt_name = None # Clear flag immediately
-
     if prompt_name_to_run in st.session_state.saved_prompts:
         user_query_from_sidebar = st.session_state.saved_prompts[prompt_name_to_run]
-        action_message = f"Running saved prompt: '{prompt_name_to_run}'"
-        st.session_state.chat_history.append(HumanMessage(content=action_message))
-        # The actual prompt text (user_query_from_sidebar) will be added to history below
+        st.session_state.chat_history.append(HumanMessage(content=f"Running saved prompt: '{prompt_name_to_run}'"))
     else:
         st.warning(f"Prompt '{prompt_name_to_run}' not found anymore.")
 
-# Get fresh user input from chat box OR use the one triggered by sidebar
+# Get input from chat box or use sidebar trigger
 user_query = st.chat_input("Type message, 'save prompt as ...', 'run prompt ...', or 'run all prompts'")
 if user_query_from_sidebar:
-    user_query = user_query_from_sidebar # Prioritize sidebar trigger
+    user_query = user_query_from_sidebar # Prioritize sidebar run
 
-
-# Display chat history RENDER LOOP (runs every time before processing new input)
+# Display chat history
 chat_container = st.container()
 with chat_container:
     for message in st.session_state.chat_history:
         avatar = "🤖" if isinstance(message, AIMessage) else "👤"
-        # Use message content directly for markdown rendering
         with st.chat_message(avatar):
-             st.markdown(str(message.content)) # Ensure content is string
+             st.markdown(str(message.content))
 
 
-# Process new user input (which might be from chat box or sidebar trigger)
+# Process new user input (only if query exists)
 if user_query is not None and user_query.strip() != "":
 
     # Add the user's input/action to history if it's not already the last message
-    # (Avoids duplicates from sidebar run or repeated commands)
     if not st.session_state.chat_history or st.session_state.chat_history[-1].content != user_query:
         st.session_state.chat_history.append(HumanMessage(content=user_query))
         # Rerun immediately to show the user message before processing
+        # This makes the flow: type message -> see message -> see response/feedback
         st.rerun()
 
-    # --- Command Handling ---
-    # Check the LATEST message in history for commands
-    latest_user_message = None
-    if st.session_state.chat_history and isinstance(st.session_state.chat_history[-1], HumanMessage):
-        latest_user_message = st.session_state.chat_history[-1].content
+    # --- Define Command Prefixes ---
+    save_prefix = "save prompt as "
+    run_prefix = "run prompt "
+    run_all_command = "run all prompts"
 
-    processed_as_command = False
-    if latest_user_message: # Only process if there's a user message to check
-        normalized_query = latest_user_message.strip().lower()
+    # --- Process the LATEST Human message in history ---
+    latest_user_message_content = None
+    if st.session_state.chat_history and isinstance(st.session_state.chat_history[-1], HumanMessage):
+        latest_user_message_content = st.session_state.chat_history[-1].content
+
+    processed_action = False # Flag to track if the latest message led to an action
+
+    if latest_user_message_content:
+        normalized_query = latest_user_message_content.strip().lower()
+
+        # --- Command Block ---
+        # This block processes the latest user message if it matches a command format
 
         # 1. Save Command
-        save_prefix = "save prompt as "
-        if normalized_query.startswith(save_prefix) and ":" in latest_user_message:
-            processed_as_command = True
+        if normalized_query.startswith(save_prefix) and ":" in latest_user_message_content:
+            processed_action = True
             try:
-                command_body = latest_user_message[len(save_prefix):]
+                command_body = latest_user_message_content[len(save_prefix):]
                 name_part, prompt_text = command_body.split(":", 1)
                 prompt_name = name_part.strip()
                 prompt_text = prompt_text.strip()
@@ -349,29 +302,26 @@ if user_query is not None and user_query.strip() != "":
             except ValueError:
                  err_msg = "Invalid format. Use 'save prompt as NAME: PROMPT TEXT' (colon required)."
                  st.session_state.chat_history.append(AIMessage(content=f"Error: {err_msg}"))
-            st.rerun() 
-            # Rerun after processing save command attempt
+            st.rerun() # Rerun after save attempt
 
-        # 2. Run Single Prompt Command (from chat input)
-        run_prefix = "run prompt "
+        # 2. Run Single Prompt Command
         elif normalized_query.startswith(run_prefix):
-            processed_as_command = True
-            prompt_name_to_run = latest_user_message[len(run_prefix):].strip()
+            processed_action = True
+            prompt_name_to_run = latest_user_message_content[len(run_prefix):].strip()
             if prompt_name_to_run in st.session_state.saved_prompts:
                 saved_prompt_text = st.session_state.saved_prompts[prompt_name_to_run]
                 feedback = f"Okay, running prompt '{prompt_name_to_run}'."
                 st.session_state.chat_history.append(AIMessage(content=feedback))
                 # Add the actual prompt text as the next message to be processed
                 st.session_state.chat_history.append(HumanMessage(content=saved_prompt_text))
-                # No need to set processed_as_command = False, the rerun will handle it
             else:
                 feedback = f"Sorry, I couldn't find a saved prompt named '{prompt_name_to_run}'."
                 st.session_state.chat_history.append(AIMessage(content=feedback))
             st.rerun() # Rerun to process the added prompt or show feedback
 
         # 3. Run All Prompts Command
-        elif normalized_query == "run all prompts":
-            processed_as_command = True
+        elif normalized_query == run_all_command:
+            processed_action = True
             if not st.session_state.saved_prompts:
                 feedback = "No saved prompts to run."
                 st.session_state.chat_history.append(AIMessage(content=feedback))
@@ -387,21 +337,18 @@ if user_query is not None and user_query.strip() != "":
                 current_step = 0
                 total_steps = len(st.session_state.saved_prompts)
 
-                # Use st.status for visual grouping during sequence run
                 with st.status(f"Running prompt sequence (0/{total_steps})...", expanded=True) as status:
                     for name, prompt_text in st.session_state.saved_prompts.items():
                         current_step += 1
-                        status.update(label=f"Running prompt sequence ({current_step}/{total_steps}): '{name}'")
-                        sequence_step_message = f"Running prompt: '{name}'"
-                        # Add messages to history (will be displayed on next rerun)
-                        st.session_state.chat_history.append(HumanMessage(content=sequence_step_message))
+                        status.update(label=f"Running sequence ({current_step}/{total_steps}): '{name}'")
+                        # Add messages to history for processing
+                        st.session_state.chat_history.append(HumanMessage(content=f"Running prompt: '{name}'"))
                         st.session_state.chat_history.append(HumanMessage(content=prompt_text))
-                        # Display intermediate step info within status
+                        # Display step info in status
                         st.markdown(f"**Running: {name}**\n> {prompt_text}")
-                        # Get response based on history UP TO THIS POINT
                         response = get_response(prompt_text, st.session_state.chat_history, vector_store)
                         st.session_state.chat_history.append(AIMessage(content=response))
-                        # Display response within status
+                        # Display response in status
                         st.markdown(f"**Response:**\n{response}")
                         st.divider()
 
@@ -410,26 +357,24 @@ if user_query is not None and user_query.strip() != "":
                 st.session_state.chat_history.append(AIMessage(content=end_message))
             # Rerun needed to display all history added during the sequence run cleanly
             st.rerun()
-        # If no commands matched, processed_as_command remains False
-
+        # --- End of Command Block ---
 
     # --- Normal Chat Processing ---
-    # Process the latest Human message if it wasn't handled as a command
-    if not processed_as_command and latest_user_message:
+    # Process the latest human message if it wasn't a command AND if API key is OK
+    if latest_user_message_content and not processed_action:
         if not api_key_configured:
-             # Add error message as AI response if not already added
-             if not st.session_state.chat_history or st.session_state.chat_history[-1].content != "Error: Please configure your Google API Key in the sidebar first.":
-                 st.session_state.chat_history.append(AIMessage(content="Error: Please configure your Google API Key in the sidebar first."))
-                 st.rerun() # Rerun to display the error message
+             # Add error message only if not already the last message
+             if not st.session_state.chat_history or st.session_state.chat_history[-1].content != "Error: API Key not configured. Cannot process message.":
+                 st.session_state.chat_history.append(AIMessage(content="Error: API Key not configured. Cannot process message."))
+                 st.rerun()
         else:
-            # Get response for the latest user message
+            # Get LLM response for the latest user message
             with st.spinner("Thinking..."):
                 vector_store = st.session_state.get("vector_store", None)
-                # Pass the actual message content to get_response
-                response = get_response(latest_user_message, st.session_state.chat_history, vector_store)
+                response = get_response(latest_user_message_content, st.session_state.chat_history, vector_store)
 
             # Add AI response to history
             st.session_state.chat_history.append(AIMessage(content=response))
             st.rerun() # Rerun to display the new AI response
 
-# If user_query was None (no new input), the script finishes, displaying current history.
+# End of script run. Streamlit displays the state.
